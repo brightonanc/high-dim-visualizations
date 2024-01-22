@@ -83,17 +83,18 @@ def make_simplex_triangles(granularity):
     ]
     point_arr, triangle_arr = make_triangulation(point_arr, refine_level=granularity)
     vectors = np.stack(point_arr, axis=0)
+    vectors /= np.linalg.norm(vectors, axis=-1, keepdims=True)
     triangles = np.array(triangle_arr, dtype=np.int32)
     return vectors, triangles
 
-def axis_angle_to_matrix(v0, v1, v2, theta):
+def axis_angle_to_matrix(theta, v0, v1, v2):
+    assert isinstance(theta, float)
     assert isinstance(v0, float)
     assert isinstance(v1, float)
     assert isinstance(v2, float)
-    assert isinstance(theta, float)
+    theta *= np.pi
     v = np.array([v0, v1, v2])
     v /= np.linalg.norm(v, axis=-1, keepdims=True)
-    theta *= np.pi
     return (
         np.outer(v, v) +
         (np.cos(theta) * (np.eye(3) - np.outer(v, v))) +
@@ -133,11 +134,14 @@ class StateButton(widgets.Button):
         self.on_clicked(self.increment_state)
     def get_state(self):
         return self._state
+    def set_state(self, state):
+        if self._state != state:
+            self._state = state
+            self.label.set_text(self.label_arr[self._state])
+            self.canvas.draw_idle()
+        return self
     def increment_state(self, event=None):
-        self._state += 1
-        self._state %= len(self.label_arr)
-        self.label.set_text(self.label_arr[self._state])
-        self.canvas.draw_idle()
+        self.set_state((self._state + 1) % len(self.label_arr))
 
 class SliderStyle0(widgets.Slider):
     def __init__(self, fontsize, *args, **kwargs):
@@ -192,112 +196,180 @@ class App:
                 'lemniscate',
                 'pos_shell',
                 'neg_shell',
+                'hiding',
             ),
             'reflections-button': (
-                False,
                 True,
+                False,
+            ),
+            'axislines-button': (
+                True,
+                False,
+            ),
+            'slice-button': (
+                True,
+                False,
             ),
         }
         self._refs_keep_alive = []
         self.registry = {
+            'mode-button': [None for _ in range(self.num_ops)],
             'lamb-slider': [[] for _ in range(self.num_ops)],
             'axang-slider': [[] for _ in range(self.num_ops)],
-            'mode-button': [None for _ in range(self.num_ops)],
             'reflections-button': None,
+            'axislines-button': None,
+            'slice-button': None,
             'reflection-alpha': None,
+            'granularity-slider': None,
+            'slice-slider': [],
         }
+        margin_fig_x = 0.01
+        margin_fig_y = 0.02
+        fontsize = 8
         fig = plt.figure()
         self.fig = fig
+        subfigs0_width_ratios = [8, 1, 4]
         subfigs0 = fig.subfigures(
             1, 3,
             wspace=0,
             hspace=0,
-            width_ratios=[10, 1, 4],
+            width_ratios=subfigs0_width_ratios,
         )
         self.subfigs0 = subfigs0
+        axd = {}
+        subfigs01_height_ratios = [1, 1, 1, 1, 7, 7, 7]
+        axd.update(subfigs0[1].subplot_mosaic(
+            [
+                ['swap-views', 'swap-views'],
+                ['toggle-reflections', 'toggle-reflections'],
+                ['toggle-axislines', 'toggle-axislines'],
+                ['toggle-slice', 'toggle-slice'],
+                ['reflection-alpha', 'granularity'],
+                ['slice-angle', 'slice-axis0'],
+                ['slice-axis1', 'slice-axis2'],
+            ],
+            height_ratios=subfigs01_height_ratios,
+        ))
+        subfigs0[1].subplots_adjust(
+            left=0.01, right=0.97,
+            #bottom=margin_fig_y, # Have to adjust for slider text
+            bottom=margin_fig_y+0.02,
+            top=1.-margin_fig_y,
+            wspace=0.1, hspace=0.4,
+        )
+        subfigs1_height_ratios = [10, 7]
         subfigs1 = subfigs0[2].subfigures(
             2, 1,
             wspace=0,
             hspace=0,
-            height_ratios=[10, 4],
+            height_ratios=subfigs1_height_ratios,
         )
         self.subfigs1 = subfigs1
-        mosaic = [
-            ['swap-views', 'toggle-reflections', 'reflection-alpha', 'reflection-alpha'],
-        ] + sum(([
-            [f'op{op_id}lamb0', f'op{op_id}lamb0', f'op{op_id}axang0', f'op{op_id}axang0'],
-            [f'op{op_id}lamb1', f'op{op_id}lamb1', f'op{op_id}axang1', f'op{op_id}axang1'],
-            [f'op{op_id}lamb2', f'op{op_id}lamb2', f'op{op_id}axang2', f'op{op_id}axang2'],
-            [f'op{op_id}mode',  f'op{op_id}mode',  f'op{op_id}axang3', f'op{op_id}axang3'],
-        ] for op_id in range(self.num_ops)), start=[])
-        axd = subfigs1[0].subplot_mosaic(mosaic)
-        #axd = subfigs1[0].subplot_mosaic(
-        #    [
-        #        ['swap-views', 'toggle-reflections', 'add-operator', 'remove-operator'],
-        #        ['op0lamb0', 'op0lamb0', 'op0axang0', 'op0axang0'],
-        #        ['op0lamb1', 'op0lamb1', 'op0axang1', 'op0axang1'],
-        #        ['op0lamb2', 'op0lamb2', 'op0axang2', 'op0axang2'],
-        #        ['op1lamb0', 'op1lamb0', 'op1axang0', 'op1axang0'],
-        #        ['op1lamb1', 'op1lamb1', 'op1axang1', 'op1axang1'],
-        #        ['op1lamb2', 'op1lamb2', 'op1axang2', 'op1axang2'],
-        #        ['op2lamb0', 'op2lamb0', 'op2axang0', 'op2axang0'],
-        #        ['op2lamb1', 'op2lamb1', 'op2axang1', 'op2axang1'],
-        #        ['op2lamb2', 'op2lamb2', 'op2axang2', 'op2axang2'],
-        #    ],
-        #)
-        margin = 0.01
-        self.rect_main = (margin, margin, 1-(2*margin), 1-(2*margin))
+        tmp = subfigs1[0].subplots(4*self.num_ops, 2)
+        subfigs1[0].subplots_adjust(
+            left=0.01,
+            bottom=0.01,
+            right=1.-((sum(subfigs0_width_ratios)/subfigs0_width_ratios[2])*margin_fig_x),
+            top=1.-((sum(subfigs1_height_ratios)/subfigs1_height_ratios[0])*margin_fig_y),
+            wspace=0.1, hspace=0.2,
+        )
+        for op_id in range(self.num_ops):
+            axd[f'op{op_id}mode'] = tmp[4*op_id][0]
+            axd[f'op{op_id}angle'] = tmp[4*op_id][1]
+            for dim in range(3):
+                axd[f'op{op_id}lamb{dim}'] = tmp[(4*op_id)+1+dim][0]
+                axd[f'op{op_id}axis{dim}'] = tmp[(4*op_id)+1+dim][1]
+
+        left = (sum(subfigs0_width_ratios)/subfigs0_width_ratios[0])*margin_fig_x
+        self.rect_main = (
+            left, # left
+            margin_fig_y, # bottom
+            0.99-left, # width
+            1-(2*margin_fig_y), # height
+        )
         axd['main'] = subfigs0[0].add_axes(self.rect_main, projection='3d')
-        self.rect_alt = (margin, margin, 1-(2*margin), 1-(2*margin))
+        left = 0.01
+        right_pad = (sum(subfigs0_width_ratios)/subfigs0_width_ratios[2])*margin_fig_x
+        bottom = (sum(subfigs1_height_ratios)/subfigs1_height_ratios[1])*margin_fig_y
+        self.rect_alt = (
+            left, # left
+            bottom, # bottom
+            1.-(left+right_pad), # width
+            0.99-bottom, # height
+        )
         axd['alt'] = subfigs1[1].add_axes(self.rect_alt)
         self.axd = axd
-        #fig, axd = plt.subplot_mosaic(
-        #    [
-        #        ['main', 'swap-views', 'toggle-reflections', 'add-operator', 'remove-operator'],
-        #        ['main', 'op0lamb0', 'op0lamb0', 'op0axang0', 'op0axang0'],
-        #        ['main', 'op0lamb1', 'op0lamb1', 'op0axang1', 'op0axang1'],
-        #        ['main', 'op0lamb2', 'op0lamb2', 'op0axang2', 'op0axang2'],
-        #        ['main', 'op1lamb0', 'op1lamb0', 'op1axang0', 'op1axang0'],
-        #        ['main', 'op1lamb1', 'op1lamb1', 'op1axang1', 'op1axang1'],
-        #        ['main', 'op1lamb2', 'op1lamb2', 'op1axang2', 'op1axang2'],
-        #        ['main', 'op2lamb0', 'op2lamb0', 'op2axang0', 'op2axang0'],
-        #        ['main', 'op2lamb1', 'op2lamb1', 'op2axang1', 'op2axang1'],
-        #        ['main', 'op2lamb2', 'op2lamb2', 'op2axang2', 'op2axang2'],
-        #        ['main', 'alt', 'alt', 'alt', 'alt'],
-        #    ],
-        #    gridspec_kw={
-        #        'width_ratios': [10, 1, 1, 1, 1],
-        #        'height_ratios': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 5],
-        #    },
-        #    per_subplot_kw={
-        #        'main': {'projection': '3d'},
-        #        'alt': {'yscale': 'log'}
-        #    },
-        #)
-        #self.fig, self.axd = fig, axd
 
         # General
-        fontsize = 7
         tmp = self._keep_alive(widgets.Button(axd['swap-views'], 'Swap Views'))
         tmp.label.set_fontsize(fontsize)
         tmp.on_clicked(self.swap_views)
         tmp = self._keep_alive(StateButton(axd['toggle-reflections'], (
-            'Show Refls',
             'Hide Refls',
+            'Show Refls',
         )))
         self.registry['reflections-button'] = tmp
         tmp.label.set_fontsize(fontsize)
         tmp.on_clicked(self.toggle_reflections)
-        tmp = self._keep_alive(SliderStyle0(
-            fontsize, axd['reflection-alpha'], r'$\alpha$',
-            0., 1., valinit=0.5,
+        tmp = self._keep_alive(StateButton(axd['toggle-axislines'], (
+            'Hide Axes',
+            'Show Axes',
+        )))
+        self.registry['axislines-button'] = tmp
+        tmp.label.set_fontsize(fontsize)
+        tmp.on_clicked(self.toggle_axislines)
+        tmp = self._keep_alive(StateButton(axd['toggle-slice'], (
+            'Hide Slice',
+            'Show Slice',
+        )))
+        self.registry['slice-button'] = tmp
+        tmp.label.set_fontsize(fontsize)
+        tmp.on_clicked(self.toggle_slice)
+        tmp = self._keep_alive(widgets.Slider(
+            axd['reflection-alpha'], r'$\alpha$',
+            0., 1., valinit=0.5, orientation='vertical',
         ))
         self.registry['reflection-alpha'] = tmp
+        tmp.label.set_fontsize(fontsize)
+        tmp.valtext.set_fontsize(fontsize)
         tmp.on_changed(self.on_change_reflection_alpha)
+        tmp = self._keep_alive(widgets.Slider(
+            axd['granularity'], 'Res',
+            3, 7, valinit=4, valstep=1, orientation='vertical',
+        ))
+        self.registry['granularity-slider'] = tmp
+        tmp.label.set_fontsize(fontsize)
+        tmp.valtext.set_fontsize(fontsize)
+        tmp.on_changed(self.on_change_granularity)
+        tmp = self._keep_alive(widgets.Slider(
+            axd['slice-angle'], rf'$\theta(S)/\pi$',
+            -1., 1., valinit=0., orientation='vertical',
+        ))
+        self.registry['slice-slider'].append(tmp)
+        tmp.label.set_fontsize(fontsize)
+        tmp.valtext.set_fontsize(fontsize)
+        tmp.on_changed(functools.partial(self.update_slice, dim))
+        for dim in range(3):
+            tmp = self._keep_alive(widgets.Slider(
+                axd[f'slice-axis{dim}'], rf'Axis$_{dim}(S)$',
+                -1., 1., valinit=(1. if 0==dim else 0.), orientation='vertical',
+            ))
+            self.registry['slice-slider'].append(tmp)
+            tmp.label.set_fontsize(fontsize)
+            tmp.valtext.set_fontsize(fontsize)
+            tmp.on_changed(functools.partial(self.update_slice, dim))
 
         # Per-Op
-        fontsize = 7
         for op_id in range(self.num_ops):
+            tmp = self._keep_alive(StateButton(axd[f'op{op_id}mode'], (
+                f'Showing $A_{op_id}$ as Lemniscate',
+                f'Showing $A_{op_id}$ as +Shell',
+                f'Showing $A_{op_id}$ as -Shell',
+                f'Hiding $A_{op_id}$',
+            )).set_state(0 if (0==op_id) else 3))
+            self.registry['mode-button'][op_id] = tmp
+            tmp.label.set_fontsize(fontsize)
+            tmp.on_clicked(functools.partial(self.toggle_op_mode, op_id))
             for dim in range(3):
                 tmp = self._keep_alive(SliderStyle0(
                     fontsize, axd[f'op{op_id}lamb{dim}'], rf'$\lambda_{dim}(A_{op_id})$',
@@ -305,40 +377,31 @@ class App:
                 ))
                 self.registry['lamb-slider'][op_id].append(tmp)
                 tmp.on_changed(functools.partial(self.update_lamb, op_id, dim))
-            for dim in range(3):
-                tmp = self._keep_alive(SliderStyle0(
-                    fontsize, axd[f'op{op_id}axang{dim}'], rf'Axis$_{dim}(A_{op_id})$',
-                    -1., 1., valinit=(1. if 0==dim else 0.),
-                ))
-                self.registry['axang-slider'][op_id].append(tmp)
-                tmp.on_changed(functools.partial(self.update_axang, op_id, dim))
             tmp = self._keep_alive(SliderStyle0(
-                fontsize, axd[f'op{op_id}axang3'], rf'$\theta(A_{op_id})/\pi$',
+                fontsize, axd[f'op{op_id}angle'], rf'$\theta(A_{op_id})/\pi$',
                 -1., 1., valinit=0.,
             ))
             self.registry['axang-slider'][op_id].append(tmp)
             tmp.on_changed(functools.partial(self.update_axang, op_id, dim))
-            tmp = self._keep_alive(StateButton(axd[f'op{op_id}mode'], (
-                f'Showing $A_{op_id}$ as\nLemniscate',
-                f'Showing $A_{op_id}$ as\n+Shell',
-                f'Showing $A_{op_id}$ as\n-Shell',
-            )))
-            self.registry['mode-button'][op_id] = tmp
-            tmp.label.set_fontsize(fontsize)
-            tmp.on_clicked(functools.partial(self.toggle_op_mode, op_id))
+            for dim in range(3):
+                tmp = self._keep_alive(SliderStyle0(
+                    fontsize, axd[f'op{op_id}axis{dim}'], rf'Axis$_{dim}(A_{op_id})$',
+                    -1., 1., valinit=(1. if 0==dim else 0.),
+                ))
+                self.registry['axang-slider'][op_id].append(tmp)
+                tmp.on_changed(functools.partial(self.update_axang, op_id, dim))
 
 
         # Initial Cofiguration
         self.ax3D = axd['main']
+        self.ax3D.set_xticks([])
+        self.ax3D.set_yticks([])
+        self.ax3D.set_zticks([])
         self.ax2D = axd['alt']
+        self.ax2D.set_xticks([])
+        self.ax2D.set_yticks([])
 
         self.init_data()
-        self.on_data_changed(*range(self.num_ops))
-
-        # Fix layout issues
-        plt.pause(0.1)
-        self.fig.tight_layout()
-        self.fig.canvas.draw_idle()
 
     def _keep_alive(self, x):
         self._refs_keep_alive.append(x)
@@ -356,17 +419,34 @@ class App:
                 # matplotlib/lib/mpl_toolkits/mplot3d/axes3d.py:shareview
                 info['ax._vertical_axis'] = {0: "x", 1: "y", 2: "z"}[ax._vertical_axis]
                 info['ax._focal_length'] = ax._focal_length
+                info['ax.xticks'] = ax.get_xticks()
+                info['ax.yticks'] = ax.get_yticks()
+                info['ax.zticks'] = ax.get_zticks()
+                info['ax.xlim'] = ax.get_xlim()
+                info['ax.ylim'] = ax.get_ylim()
+                info['ax.zlim'] = ax.get_zlim()
+                info['ax.frame_on'] = ax.get_frame_on()
                 # It's easier to just remember how to plot data then deal with
                 # figuring out how to recover it directly from the Axes3D, so
                 # we do that with self.render_data
             else:
                 info['class'] = Axes
+                info['ax.xticks'] = ax.get_xticks()
+                info['ax.yticks'] = ax.get_yticks()
+                info['ax.xlim'] = ax.get_xlim()
+                info['ax.ylim'] = ax.get_ylim()
+                info['ax.frame_on'] = ax.get_frame_on()
             return info
-        def consume_info(info, subfig, rect):
+        def consume_info_pre(info, subfig, rect):
             if info['class'] is Axes3D:
                 ax = subfig.add_axes(rect, projection='3d')
                 self.ax3D = ax
-                self.render_3D(render_all=True)
+            else:
+                ax = subfig.add_axes(rect)
+                self.ax2D = ax
+            return ax
+        def consume_info_post(ax, info):
+            if info['class'] is Axes3D:
                 ax.view_init(
                     elev=info['ax.elev'],
                     azim=info['ax.azim'],
@@ -380,36 +460,69 @@ class App:
                     proj_type='persp',
                     focal_length=info['ax._focal_length'],
                 )
+                ax.set_xticks(info['ax.xticks'])
+                ax.set_yticks(info['ax.yticks'])
+                ax.set_zticks(info['ax.zticks'])
+                ax.set_xlim(info['ax.xlim'])
+                ax.set_ylim(info['ax.ylim'])
+                ax.set_zlim(info['ax.zlim'])
+                ax.set_frame_on(info['ax.frame_on'])
             else:
-                ax = subfig.add_axes(rect)
-                self.ax2D = ax
-                self.render_2D(render_all=True)
-            return ax
+                ax.set_xticks(info['ax.xticks'])
+                ax.set_yticks(info['ax.yticks'])
+                ax.set_xlim(info['ax.xlim'])
+                ax.set_ylim(info['ax.ylim'])
+                ax.set_frame_on(info['ax.frame_on'])
         info_main = get_info(self.axd['main'])
         info_alt = get_info(self.axd['alt'])
         self.subfigs0[0].delaxes(self.axd['main'])
         self.subfigs1[1].delaxes(self.axd['alt'])
-        self.axd['main'] = consume_info(info_alt, self.subfigs0[0], self.rect_main)
-        self.axd['alt'] = consume_info(info_main, self.subfigs1[1], self.rect_alt)
+        self.axd['main'] = consume_info_pre(info_alt, self.subfigs0[0], self.rect_main)
+        self.axd['alt'] = consume_info_pre(info_main, self.subfigs1[1], self.rect_alt)
+        self.render(render_all=True)
+        consume_info_post(self.axd['main'], info_alt)
+        consume_info_post(self.axd['alt'], info_main)
         self.fig.canvas.draw_idle()
 
     def toggle_reflections(self, event):
         self.on_data_changed(*range(self.num_ops))
 
-    def on_change_reflection_alpha(self, event):
+    def toggle_axislines(self, event):
+        self.render_data['axislines']['stale'] = True
+        self.render()
+
+    def toggle_slice(self, event):
+        self.render_data['slice']['stale'] = True
+        self.render()
+
+    def on_change_reflection_alpha(self, val):
         do_show_reflections = self.translation_tables['reflections-button'][
             self.registry['reflections-button'].get_state()
         ]
         if do_show_reflections:
-            self.on_data_changed(*range(self.num_ops))
+            for op_id in range(self.num_ops):
+                self.render_data['op'][op_id]['3D']['stale'] = True
+                self.render_data['op'][op_id]['2D']['stale'] = True
+            self.render()
+
+    def on_change_granularity(self, val):
+        self.on_data_changed(*range(self.num_ops), only_dimlty='3D')
+
+    def update_slice(self, slice_axang_id, val):
+        self.on_slice_changed()
 
     def toggle_op_mode(self, op_id, event):
+        self.render_data['axislines']['stale'] = True
         self.on_data_changed(op_id)
+        self.on_slice_changed(only_if_r_changed=True)
 
     def update_lamb(self, op_id, lamb_id, val):
+        self.render_data['axislines']['stale'] = True
         self.on_data_changed(op_id)
+        self.on_slice_changed(only_if_r_changed=True)
 
     def update_axang(self, op_id, axang_id, val):
+        self.render_data['axislines']['stale'] = True
         self.on_data_changed(op_id)
 
     def get_RealSymmetricOperator3(self, op_id):
@@ -419,53 +532,216 @@ class App:
         )
         return operator
 
-    def render_2D(self, render_all=False):
-        pass #TODO
-
-    def render_3D(self, render_all=False):
+    def render(self, render_all=False):
+        ALPHA_MAIN = 0.95
         # It's easier to just remember how to plot data then deal with figuring
         # out how to recover it directly from the Axes3D, so we do this
-        did_render = False
-        for op_id, op_data in enumerate(self.render_data['3D']['op']):
-            if op_data['stale'] or render_all:
-                op_data['stale'] = False
-                did_render = True
-                self.ax3D.autoscale()
-                for artist in op_data['artists']:
-                    artist.remove()
-                op_data['artists'] = []
+        did_render_3D = False
+        did_render_2D = False
+        if render_all:
+            self.ax3D.scatter(
+                [0], [0], [0],
+                color=(0., 0., 0., 0.4),
+                marker='.'
+            )
+            self.ax2D.scatter(
+                [0], [0],
+                color=(0., 0., 0., 0.4),
+                marker='.'
+            )
+        for op_id, op_data in enumerate(self.render_data['op']):
+            if render_all:
+                for dimlty in ('3D', '2D'):
+                    op_data[dimlty]['stale'] = True
+            if any(op_data[x]['stale'] for x in ('3D', '2D')):
+                stale_3D = op_data['3D']['stale']
+                stale_2D = op_data['2D']['stale']
+                op_data['3D']['stale'] = False
+                op_data['2D']['stale'] = False
                 mode = self.translation_tables['mode-button'][
                     self.registry['mode-button'][op_id].get_state()
                 ]
-                op_data['artists'].append(self.ax3D.plot_trisurf(
-                    op_data[mode]['x'],
-                    op_data[mode]['y'],
-                    self.render_data['3D']['domain']['triangles'],
-                    op_data[mode]['z'],
-                    color=self.ops_colorwheel[op_id],
-                ))
+                if stale_3D:
+                    for artist in op_data['3D']['artists']:
+                        artist.remove()
+                    op_data['3D']['artists'] = []
+                if stale_2D:
+                    for artist in op_data['2D']['artists']:
+                        artist.remove()
+                    op_data['2D']['artists'] = []
+                if 'hiding' == mode:
+                    continue
+                if stale_3D:
+                    #self.ax3D.autoscale()
+                    did_render_3D = True
+                    op_data['3D']['artists'].append(self.ax3D.plot_trisurf(
+                        op_data['3D'][mode]['x'],
+                        op_data['3D'][mode]['y'],
+                        self._get_domain('3D')['triangles'],
+                        op_data['3D'][mode]['z'],
+                        color=(*self.ops_colorwheel[op_id], ALPHA_MAIN),
+                    ))
+                if stale_2D:
+                    did_render_2D = True
+                    op_data['2D']['artists'].append(self.ax2D.plot(
+                        op_data['2D'][mode]['main']['x'],
+                        op_data['2D'][mode]['main']['y'],
+                        color=(*self.ops_colorwheel[op_id], ALPHA_MAIN),
+                    )[0])
+                    tmp = self.render_data['slice']['r'] * np.array([[1, 0], [0, 1]])
+                    op_data['2D']['artists'].append(self.ax2D.scatter(
+                        tmp[0],
+                        tmp[1],
+                        color=(0., 0., 0., 0.4),
+                        marker='x',
+                    ))
                 do_show_reflections = self.translation_tables['reflections-button'][
                     self.registry['reflections-button'].get_state()
                 ]
                 if do_show_reflections:
-                    for i, mode_data in enumerate(op_data[mode]['reflections']):
-                        triangles = self.render_data['3D']['domain']['triangles']
-                        if i in {0,1,3,6}:
-                            triangles = triangles[:, ::-1]
-                        op_data['artists'].append(self.ax3D.plot_trisurf(
-                            mode_data['x'],
-                            mode_data['y'],
-                            triangles,
-                            mode_data['z'],
+                    if stale_3D:
+                        for i, mode_data in enumerate(op_data['3D'][mode]['reflections']):
+                            triangles = self._get_domain('3D')['triangles']
+                            if i in {0,1,3,6}:
+                                triangles = triangles[:, ::-1]
+                            op_data['3D']['artists'].append(self.ax3D.plot_trisurf(
+                                mode_data['x'],
+                                mode_data['y'],
+                                triangles,
+                                mode_data['z'],
+                                color=(*self.ops_colorwheel[op_id], self.registry['reflection-alpha'].val),
+                            ))
+                    if stale_2D:
+                        op_data['2D']['artists'].append(self.ax2D.plot(
+                            op_data['2D'][mode]['refl']['x'],
+                            op_data['2D'][mode]['refl']['y'],
                             color=(*self.ops_colorwheel[op_id], self.registry['reflection-alpha'].val),
-                        ))
-        if did_render:
+                        )[0])
+        axislines_data = self.render_data['axislines']
+        if axislines_data['stale'] or render_all:
+            axislines_data['stale'] = False
+            for artist in axislines_data['3D']['artists']:
+                artist.remove()
+            axislines_data['3D']['artists'] = []
+            for artist in axislines_data['2D']['artists']:
+                artist.remove()
+            axislines_data['2D']['artists'] = []
+            do_show_axislines = self.translation_tables['axislines-button'][
+                self.registry['axislines-button'].get_state()
+            ]
+            if do_show_axislines:
+                for op_id in range(self.num_ops):
+                    mode = self.translation_tables['mode-button'][
+                        self.registry['mode-button'][op_id].get_state()
+                    ]
+                    if 'hiding' == mode:
+                        continue
+                    #self.ax3D.autoscale()
+                    operator = self.get_RealSymmetricOperator3(op_id)
+                    did_render_3D = True
+                    pm1 = np.array([-1., 1])
+                    for i in range(3):
+                        r = operator.eigenvalues[i] if 'lemniscate'==mode else 1.
+                        axislines_data['3D']['artists'].append(self.ax3D.plot(
+                            1.1 * r * operator.eigenvectors[0, i] * pm1,
+                            1.1 * r * operator.eigenvectors[1, i] * pm1,
+                            1.1 * r * operator.eigenvectors[2, i] * pm1,
+                            color=(*self.ops_colorwheel[op_id], ALPHA_MAIN),
+                        )[0])
+                    did_render_2D = True
+                    proj_eigvecs = self.render_data['slice']['basis'].T @ operator.eigenvectors
+                    for i in range(3):
+                        r = operator.eigenvalues[i] if 'lemniscate'==mode else 1.
+                        axislines_data['2D']['artists'].append(self.ax2D.plot(
+                            r * proj_eigvecs[0, i] * pm1,
+                            r * proj_eigvecs[1, i] * pm1,
+                            color=(*self.ops_colorwheel[op_id], ALPHA_MAIN),
+                        )[0])
+        slice_data = self.render_data['slice']
+        if slice_data['stale'] or render_all:
+            slice_data['stale'] = False
+            for artist in slice_data['artists']:
+                artist.remove()
+            slice_data['artists'] = []
+            do_show_slice = self.translation_tables['slice-button'][
+                self.registry['slice-button'].get_state()
+            ]
+            if do_show_slice:
+                #self.ax3D.autoscale()
+                did_render_3D = True
+                slice_data['artists'].append(self.ax3D.plot_surface(
+                    slice_data['x'],
+                    slice_data['y'],
+                    slice_data['z'],
+                    color=(1., 1., 1., 0.4),
+                ))
+                tmp = slice_data['r'] * np.cumsum(slice_data['basis'], axis=-1)
+                slice_data['artists'].append(self.ax3D.scatter(
+                    tmp[0],
+                    tmp[1],
+                    tmp[2],
+                    color=(0., 0., 0., 0.4),
+                    marker='x',
+                ))
+        if did_render_3D:
             set_aspect_equal_3d(self.ax3D)
+        if did_render_2D:
+            self.ax2D.set_aspect('equal', 'box')
+            r = self.render_data['slice']['r']
+            self.ax2D.set(xlim=(-r, r), ylim=(-r, r))
+
+    def _get_domain(self, dimlty):
+        assert dimlty in ('3D', '2D')
+        if '3D' == dimlty:
+            domain_dict = self.render_data['domain'][dimlty]
+            granularity = self.registry['granularity-slider'].val
+            if granularity not in domain_dict:
+                vectors, triangles = make_simplex_triangles(granularity=granularity)
+                domain_dict[granularity] = {
+                    'vectors': vectors,
+                    'triangles': triangles,
+                }
+            return domain_dict[granularity]
+        else:
+            return self.render_data['domain'][dimlty]
 
     def init_data(self):
+        num_grid = 256
+        tmp = np.arange(num_grid) / num_grid
+        domain_2D = np.stack((
+            np.cos(2*np.pi*tmp),
+            np.sin(2*np.pi*tmp),
+        ), axis=-1)
+        num_grid = 32
+        tmp = np.linspace(-1, 1, num_grid)
+        slice_domain_vecs = np.stack((
+            *np.meshgrid(tmp, tmp),
+            np.zeros((num_grid, num_grid))
+        ), axis=-1)
         self.render_data = {
-            '3D': {
-                'op': [{
+            'domain': {
+                '3D': {},
+                '2D': domain_2D,
+            },
+            'axislines': {
+                'stale': False,
+                '3D': {
+                    'artists': [],
+                },
+                '2D': {
+                    'artists': [],
+                },
+            },
+            'slice': {
+                'domain-vectors': slice_domain_vecs,
+                'stale': False,
+                'artists': [],
+                'r': None,
+                'basis': None,
+            },
+            'op': [{
+                '3D': {
+                    'stale': False,
                     'artists': [],
                     'lemniscate': {
                         'reflections': [{} for _ in range(7)],
@@ -476,74 +752,191 @@ class App:
                     'neg_shell': {
                         'reflections': [{} for _ in range(7)],
                     },
-                } for _ in range(self.num_ops)],
-            },
-            '2D': {
-            }
+                },
+                '2D': {
+                    'stale': False,
+                    'artists': [],
+                    'lemniscate': {
+                        'main': {},
+                        'refl': {},
+                    },
+                    'pos_shell': {
+                        'main': {},
+                        'refl': {},
+                    },
+                    'neg_shell': {
+                        'main': {},
+                        'refl': {},
+                    },
+                },
+            } for _ in range(self.num_ops)],
         }
-        vectors, triangles = make_simplex_triangles(granularity=5)
-        vectors /= np.linalg.norm(vectors, axis=-1, keepdims=True)
-        self.render_data['3D']['domain'] = {
-            'vectors': vectors,
-            'triangles': triangles,
-        }
+        self._get_domain('3D')
+        self._get_domain('2D')
+        self.on_slice_changed()
+        self.on_data_changed(*range(self.num_ops))
+        self.render(render_all=True)
 
-    def on_data_changed(self, *op_id_arr):
+    def on_data_changed(self, *op_id_arr, only_dimlty=None):
+        assert only_dimlty in (None, '3D', '2D')
         for op_id in op_id_arr:
-            self.render_data['3D']['op'][op_id]['stale'] = True
-            vectors = self.render_data['3D']['domain']['vectors']
             operator = self.get_RealSymmetricOperator3(op_id)
-            r = operator.get_basisless_rayleigh(vectors)
-            rotd_vecs = np.squeeze(operator.eigenvectors @ vectors[..., None], -1)
-            xyz = r[..., None] * rotd_vecs
-            self.render_data['3D']['op'][op_id]['lemniscate'].update({
-                'x': xyz[:, 0],
-                'y': xyz[:, 1],
-                'z': xyz[:, 2],
-            })
-            xyz = rotd_vecs.copy()
-            xyz[0. > r] = np.nan
-            self.render_data['3D']['op'][op_id]['pos_shell'].update({
-                'x': xyz[:, 0],
-                'y': xyz[:, 1],
-                'z': xyz[:, 2],
-            })
-            xyz = rotd_vecs.copy()
-            xyz[0. < r] = np.nan
-            self.render_data['3D']['op'][op_id]['neg_shell'].update({
-                'x': xyz[:, 0],
-                'y': xyz[:, 1],
-                'z': xyz[:, 2],
-            })
-            for i in range(7): #enumerate(self.render_data['3D']['op'][op_id]['lemniscate']['reflections']):
-                perm_vectors = vectors.copy()
-                for j in range(3):
-                    if 0 != ((i+1) & (1<<j)):
-                        perm_vectors[..., j] *= -1
-                rotd_vecs = np.squeeze(operator.eigenvectors @ perm_vectors[..., None], -1)
+            if '2D' != only_dimlty:
+                self.render_data['op'][op_id]['3D']['stale'] = True
+                vectors = self._get_domain('3D')['vectors']
+                r = operator.get_basisless_rayleigh(vectors)
+                rotd_vecs = np.squeeze(operator.eigenvectors @ vectors[..., None], -1)
                 xyz = r[..., None] * rotd_vecs
-                self.render_data['3D']['op'][op_id]['lemniscate']['reflections'][i].update({
+                self.render_data['op'][op_id]['3D']['lemniscate'].update({
                     'x': xyz[:, 0],
                     'y': xyz[:, 1],
                     'z': xyz[:, 2],
                 })
                 xyz = rotd_vecs.copy()
                 xyz[0. > r] = np.nan
-                self.render_data['3D']['op'][op_id]['pos_shell']['reflections'][i].update({
+                self.render_data['op'][op_id]['3D']['pos_shell'].update({
                     'x': xyz[:, 0],
                     'y': xyz[:, 1],
                     'z': xyz[:, 2],
                 })
                 xyz = rotd_vecs.copy()
                 xyz[0. < r] = np.nan
-                self.render_data['3D']['op'][op_id]['neg_shell']['reflections'][i].update({
+                self.render_data['op'][op_id]['3D']['neg_shell'].update({
                     'x': xyz[:, 0],
                     'y': xyz[:, 1],
                     'z': xyz[:, 2],
                 })
+                for i in range(7):
+                    perm_vectors = vectors.copy()
+                    for j in range(3):
+                        if 0 != ((i+1) & (1<<j)):
+                            perm_vectors[..., j] *= -1
+                    rotd_vecs = np.squeeze(operator.eigenvectors @ perm_vectors[..., None], -1)
+                    xyz = r[..., None] * rotd_vecs
+                    self.render_data['op'][op_id]['3D']['lemniscate']['reflections'][i].update({
+                        'x': xyz[:, 0],
+                        'y': xyz[:, 1],
+                        'z': xyz[:, 2],
+                    })
+                    xyz = rotd_vecs.copy()
+                    xyz[0. > r] = np.nan
+                    self.render_data['op'][op_id]['3D']['pos_shell']['reflections'][i].update({
+                        'x': xyz[:, 0],
+                        'y': xyz[:, 1],
+                        'z': xyz[:, 2],
+                    })
+                    xyz = rotd_vecs.copy()
+                    xyz[0. < r] = np.nan
+                    self.render_data['op'][op_id]['3D']['neg_shell']['reflections'][i].update({
+                        'x': xyz[:, 0],
+                        'y': xyz[:, 1],
+                        'z': xyz[:, 2],
+                    })
+            if '3D' != only_dimlty:
+                self.render_data['op'][op_id]['2D']['stale'] = True
+                vecs_2D = self._get_domain('2D')
+                basis = self.render_data['slice']['basis']
+                vecs_3D = np.squeeze(basis @ vecs_2D[..., None], -1)
+                r = operator.get_rayleigh(vecs_3D)
+                tmp = np.squeeze(operator.eigenvectors.T @ vecs_3D[..., None], -1)
+                refl_mask = np.any(0. > tmp, axis=-1)
+                ind = np.argwhere(np.diff(refl_mask))
+                ind = 1 + np.squeeze(ind, 1)
+                assert 1 == ind.ndim
+                # Might not be true due to numerical instability? Use -1 index
+                # below for safety
+                #assert 2 >= ind.size
+                if 0 == ind.size:
+                    vecs_2D_main = np.concatenate((vecs_2D, vecs_2D[[0]]), axis=0)
+                    vecs_2D_refl = np.zeros((0, 2))
+                    r_main = np.concatenate((r, r[[0]]), axis=0)
+                    r_refl = np.zeros((0,))
+                elif 1 == ind.size:
+                    vecs_2D_main = vecs_2D[:ind[0]+1]
+                    vecs_2D_refl = np.concatenate((vecs_2D[ind[0]:], vecs_2D[[0]]), axis=0)
+                    r_main = r[:ind[0]+1]
+                    r_refl = np.concatenate((r[ind[0]:], r[[0]]), axis=0)
+                else:
+                    vecs_2D_main = np.concatenate((vecs_2D[ind[-1]:], vecs_2D[:ind[0]+1]), axis=0)
+                    vecs_2D_refl = vecs_2D[ind[0]:ind[-1]+1]
+                    r_main = np.concatenate((r[ind[-1]:], r[:ind[0]+1]), axis=0)
+                    r_refl = r[ind[0]:ind[-1]+1]
+                if refl_mask[0]:
+                    tmp = vecs_2D_main
+                    vecs_2D_main = vecs_2D_refl
+                    vecs_2D_refl = tmp
+                    tmp = r_main
+                    r_main = r_refl
+                    r_refl = tmp
+                xy_main = r_main[:, None] * vecs_2D_main
+                xy_refl = r_refl[:, None] * vecs_2D_refl
+                self.render_data['op'][op_id]['2D']['lemniscate']['main'].update({
+                    'x': xy_main[:, 0],
+                    'y': xy_main[:, 1],
+                })
+                self.render_data['op'][op_id]['2D']['lemniscate']['refl'].update({
+                    'x': xy_refl[:, 0],
+                    'y': xy_refl[:, 1],
+                })
+                xy_main = vecs_2D_main.copy()
+                xy_main[0. > r_main] = np.nan
+                xy_refl = vecs_2D_refl.copy()
+                xy_refl[0. > r_refl] = np.nan
+                self.render_data['op'][op_id]['2D']['pos_shell']['main'].update({
+                    'x': xy_main[:, 0],
+                    'y': xy_main[:, 1],
+                })
+                self.render_data['op'][op_id]['2D']['pos_shell']['refl'].update({
+                    'x': xy_refl[:, 0],
+                    'y': xy_refl[:, 1],
+                })
+                xy_main = vecs_2D_main.copy()
+                xy_main[0. < r_main] = np.nan
+                xy_refl = vecs_2D_refl.copy()
+                xy_refl[0. < r_refl] = np.nan
+                self.render_data['op'][op_id]['2D']['neg_shell']['main'].update({
+                    'x': xy_main[:, 0],
+                    'y': xy_main[:, 1],
+                })
+                self.render_data['op'][op_id]['2D']['neg_shell']['refl'].update({
+                    'x': xy_refl[:, 0],
+                    'y': xy_refl[:, 1],
+                })
+        self.render()
 
-        self.render_3D()
-        self.render_2D()
+    def _get_ideal_slice_r(self):
+        r = -1.
+        for op_id, lamb_slider_arr in enumerate(self.registry['lamb-slider']):
+            mode = self.translation_tables['mode-button'][
+                self.registry['mode-button'][op_id].get_state()
+            ]
+            if 'lemniscate' == mode:
+                r = max([r] + [abs(x.val) for x in lamb_slider_arr])
+        if -1. == r:
+            r = 1.
+        r *= 1.1
+        return r
+
+    def on_slice_changed(self, only_if_r_changed=False):
+        r = self._get_ideal_slice_r()
+        if r != self.render_data['slice']['r']:
+            self.render_data['slice']['r'] = r
+        elif only_if_r_changed:
+            return
+        self.render_data['slice']['stale'] = True
+        self.render_data['axislines']['stale'] = True
+        vectors = self.render_data['slice']['domain-vectors']
+        basis = axis_angle_to_matrix(*[x.val for x in self.registry['slice-slider']])
+        self.render_data['slice']['basis'] = basis[:, :2]
+        rotd_vecs = np.squeeze(basis @ vectors[..., None], -1)
+        xyz = r * rotd_vecs
+        self.render_data['slice'].update({
+            'x': xyz[..., 0],
+            'y': xyz[..., 1],
+            'z': xyz[..., 2],
+        })
+        self.on_data_changed(*range(self.num_ops), only_dimlty='2D')
+        self.render()
 
     def get_info_message(self):
         msg_arr = [
@@ -585,19 +978,3 @@ class App:
 
 App().run()
 
-#axamp = fig.add([0.25, .03, 0.50, 0.02])
-## Slider
-#samp = Slider(axamp, 'Amp', 0, 1, valinit=initial_amp)
-#
-#def update(val):
-#    # amp is the current value of the slider
-#    amp = samp.val
-#    # update curve
-#    l.set_ydata(amp*np.sin(t))
-#    # redraw canvas while idle
-#    fig.canvas.draw_idle()
-#
-## call update function on slider value change
-#samp.on_changed(update)
-#
-#plt.show()
