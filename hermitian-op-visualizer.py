@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import matplotlib as mpl
-mpl.rcParams['figure.raise_window'] = False
 import matplotlib.pyplot as plt
 from matplotlib import widgets
 from matplotlib.axes import Axes
@@ -94,11 +93,15 @@ def axis_angle_to_matrix(theta, v0, v1, v2):
     assert isinstance(v2, float)
     theta *= np.pi
     v = np.array([v0, v1, v2])
-    v /= np.linalg.norm(v, axis=-1, keepdims=True)
+    del v0, v1, v2
+    norm_v = np.linalg.norm(v)
+    if 0. == norm_v:
+        return np.eye(3)
+    v /= norm_v
     return (
         np.outer(v, v) +
         (np.cos(theta) * (np.eye(3) - np.outer(v, v))) +
-        (np.sin(theta) * np.array([[0, -v2, v1], [v2, 0, -v0], [-v1, v0, 0]]))
+        (np.sin(theta) * np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]]))
     )
 
 def set_aspect_equal_3d(ax):
@@ -126,22 +129,28 @@ def set_aspect_equal_3d(ax):
     ax.set_zlim(ctr[2]-wid, ctr[2]+wid)
 
 class StateButton(widgets.Button):
-    def __init__(self, ax, label_arr, *args, **kwargs):
-        super().__init__(ax, label_arr[0], *args, **kwargs)
+    def __init__(self, ax, label_data_arr, *args, **kwargs):
+        tmp = label_data_arr[0]
+        super().__init__(ax, tmp if isinstance(tmp, str) else tmp['text'], *args, **kwargs)
         assert not hasattr(self, '_state')
-        self.label_arr = label_arr
+        assert all(isinstance(_, str) for _ in label_data_arr) or all(isinstance(_, dict) for _ in label_data_arr)
+        self.label_data_arr = label_data_arr
         self._state = 0
         self.on_clicked(self.increment_state)
     def get_state(self):
         return self._state
     def set_state(self, state):
-        if self._state != state:
-            self._state = state
-            self.label.set_text(self.label_arr[self._state])
-            self.canvas.draw_idle()
+        self._state = state
+        label_data = self.label_data_arr[self._state]
+        if isinstance(label_data, str):
+            self.label.set_text(label_data)
+        else:
+            self.label.set_text(label_data['text'])
+            self.label.set_color(label_data['color'])
+        self.canvas.draw_idle()
         return self
     def increment_state(self, event=None):
-        self.set_state((self._state + 1) % len(self.label_arr))
+        self.set_state((self._state + 1) % len(self.label_data_arr))
 
 class SliderStyle0(widgets.Slider):
     def __init__(self, fontsize, *args, **kwargs):
@@ -173,7 +182,6 @@ class SliderStyle0(widgets.Slider):
         self.valtext.set_verticalalignment('top')
         self.valtext.set_horizontalalignment('right')
         self.valtext.set_position((1, 1))
-    #@override
     def set_val(self, val):
         super().set_val(val)
         xy = self.poly.xy
@@ -312,8 +320,8 @@ class App:
         tmp.label.set_fontsize(fontsize)
         tmp.on_clicked(self.toggle_reflections)
         tmp = self._keep_alive(StateButton(axd['toggle-axislines'], (
-            'Hide Axes',
-            'Show Axes',
+            'Hide Eig-Axes',
+            'Show Eig-Axes',
         )))
         self.registry['axislines-button'] = tmp
         tmp.label.set_fontsize(fontsize)
@@ -327,7 +335,7 @@ class App:
         tmp.on_clicked(self.toggle_slice)
         tmp = self._keep_alive(widgets.Slider(
             axd['reflection-alpha'], r'$\alpha$',
-            0., 1., valinit=0.5, orientation='vertical',
+            0., 1., valinit=0.5, valstep=0.05, orientation='vertical',
         ))
         self.registry['reflection-alpha'] = tmp
         tmp.label.set_fontsize(fontsize)
@@ -343,7 +351,7 @@ class App:
         tmp.on_changed(self.on_change_granularity)
         tmp = self._keep_alive(widgets.Slider(
             axd['slice-angle'], rf'$\theta(S)/\pi$',
-            -1., 1., valinit=0., orientation='vertical',
+            -1., 1., valinit=0., valstep=0.05, orientation='vertical',
         ))
         self.registry['slice-slider'].append(tmp)
         tmp.label.set_fontsize(fontsize)
@@ -352,7 +360,7 @@ class App:
         for dim in range(3):
             tmp = self._keep_alive(widgets.Slider(
                 axd[f'slice-axis{dim}'], rf'Axis$_{dim}(S)$',
-                -1., 1., valinit=(1. if 0==dim else 0.), orientation='vertical',
+                -1., 1., valinit=(1. if 0==dim else 0.), valstep=0.05, orientation='vertical',
             ))
             self.registry['slice-slider'].append(tmp)
             tmp.label.set_fontsize(fontsize)
@@ -360,12 +368,13 @@ class App:
             tmp.on_changed(functools.partial(self.update_slice, dim))
 
         # Per-Op
+        color_arr = ('r', 'g', 'b')
         for op_id in range(self.num_ops):
             tmp = self._keep_alive(StateButton(axd[f'op{op_id}mode'], (
-                f'Showing $A_{op_id}$ as Lemniscate',
-                f'Showing $A_{op_id}$ as +Shell',
-                f'Showing $A_{op_id}$ as -Shell',
-                f'Hiding $A_{op_id}$',
+                {'text': f'Showing $A_{op_id}$ as Lemniscate', 'color': color_arr[op_id]},
+                {'text': f'Showing $A_{op_id}$ as +Shell', 'color': color_arr[op_id]},
+                {'text': f'Showing $A_{op_id}$ as -Shell', 'color': color_arr[op_id]},
+                {'text': f'Hiding $A_{op_id}$', 'color': 'k'},
             )).set_state(0 if (0==op_id) else 3))
             self.registry['mode-button'][op_id] = tmp
             tmp.label.set_fontsize(fontsize)
@@ -373,20 +382,20 @@ class App:
             for dim in range(3):
                 tmp = self._keep_alive(SliderStyle0(
                     fontsize, axd[f'op{op_id}lamb{dim}'], rf'$\lambda_{dim}(A_{op_id})$',
-                    -10., 10., valinit=1.,
+                    -9., 9., valinit=1., valstep=0.1,
                 ))
                 self.registry['lamb-slider'][op_id].append(tmp)
                 tmp.on_changed(functools.partial(self.update_lamb, op_id, dim))
             tmp = self._keep_alive(SliderStyle0(
                 fontsize, axd[f'op{op_id}angle'], rf'$\theta(A_{op_id})/\pi$',
-                -1., 1., valinit=0.,
+                -1., 1., valinit=0., valstep=0.05,
             ))
             self.registry['axang-slider'][op_id].append(tmp)
             tmp.on_changed(functools.partial(self.update_axang, op_id, dim))
             for dim in range(3):
                 tmp = self._keep_alive(SliderStyle0(
                     fontsize, axd[f'op{op_id}axis{dim}'], rf'Axis$_{dim}(A_{op_id})$',
-                    -1., 1., valinit=(1. if 0==dim else 0.),
+                    -1., 1., valinit=(1. if 0==dim else 0.), valstep=0.05,
                 ))
                 self.registry['axang-slider'][op_id].append(tmp)
                 tmp.on_changed(functools.partial(self.update_axang, op_id, dim))
@@ -425,7 +434,6 @@ class App:
                 info['ax.xlim'] = ax.get_xlim()
                 info['ax.ylim'] = ax.get_ylim()
                 info['ax.zlim'] = ax.get_zlim()
-                info['ax.frame_on'] = ax.get_frame_on()
                 # It's easier to just remember how to plot data then deal with
                 # figuring out how to recover it directly from the Axes3D, so
                 # we do that with self.render_data
@@ -466,7 +474,6 @@ class App:
                 ax.set_xlim(info['ax.xlim'])
                 ax.set_ylim(info['ax.ylim'])
                 ax.set_zlim(info['ax.zlim'])
-                ax.set_frame_on(info['ax.frame_on'])
             else:
                 ax.set_xticks(info['ax.xticks'])
                 ax.set_yticks(info['ax.yticks'])
@@ -588,7 +595,7 @@ class App:
                         op_data['2D'][mode]['main']['y'],
                         color=(*self.ops_colorwheel[op_id], ALPHA_MAIN),
                     )[0])
-                    tmp = self.render_data['slice']['r'] * np.array([[1, 0], [0, 1]])
+                    tmp = self.render_data['slice']['r'] * np.array([[1, 1], [0, 1]])
                     op_data['2D']['artists'].append(self.ax2D.scatter(
                         tmp[0],
                         tmp[1],
@@ -940,31 +947,60 @@ class App:
 
     def get_info_message(self):
         msg_arr = [
-            '''
+            '''\
                 This interactive renders real symmetric operators in 3D. There
                 are 3 visualization modes, togglable per operator with the
                 button in the right panel:
+            ''', '''\
+                * \'Lemniscate\': The surface generated by {(x^T A x) x : ||x||_2 = 1}
+            ''', '''\
+                * \'+Shell\': The surface generated by {x : ||x||_2 = 1 AND x^T A x > 0}
+            ''', '''\
+                * \'-Shell\': The surface generated by {x : ||x||_2 = 1 AND x^T A x < 0}
             ''', '''
-                * Lemniscate: The surface generated by {(x^T A x) x : ||x||_2 = 1}
-            ''', '''
-                * +Shell: The surface generated by {x : ||x||_2 = 1 AND x^T A x > 0}
-            ''', '''
-                * -Shell: The surface generated by {x : ||x||_2 = 1 AND x^T A x < 0}
-            ''', '''
-            ''', '''
-                Since these surfaces are all symmetric about their eigen-axes,
-                you can toggle whether or not to render all 7 reflections (it
-                can sometimes be useful not to render them when negative
-                eigenvalues are present). These reflections are shown with an
-                alpha channel, controllable via the alpha slider in the top
-                right.
-            ''', '''
-            ''', '''
+            ''', '''\
                 The eigenvalues for each operator are controllable
                 independently with the 3 sliders in the right panel. The
                 eigenbasis is encoded as a member of SO(3) and controllable via
                 an axis-angle representation with the 4 sliders in the right
-                panel.
+                panel. The angle theta follows the right-hand rule, rotating
+                the entire object along the specified axis. Note that the angle
+                slider value as specified by the user defines the angle theta
+                divided by pi, i.e. a slider value of 0.5 represents pi/2
+                radians. The axis slider values as specified by the user are
+                normalized to a unit norm vector prior to all internal logic;
+                i.e. an axis of (0.7, 0, 0) is equivalent to an axis of (0.5,
+                0, 0), each corresponding to the unit norm axis (1, 0, 0).
+            ''', '''
+            ''', '''\
+                Two visualizations are presented: a 3D total view and a 2D
+                sliced plane view. The user may swap the positions of these two
+                views with the \'Swap Views\' button. The slice plane from
+                which the 2D view is taken is controlled via an axis-angle
+                rotation similarly to the eigenbases mentioned above. The slice
+                plane is also shown in the 3D view, but may be toggled to hide.
+                In both the 3D and 2D views, there are two crosshairs rendered
+                along the edge of the slice plane solely as a visual reference
+                aid between the two views.
+            ''', '''
+            ''', '''\
+                Since these surfaces are all symmetric about their eigen-axes,
+                the user may toggle whether or not to render all 7 reflections
+                (it can sometimes be useful not to render them when negative
+                eigenvalues are present). These reflections are shown with an
+                alpha channel, controllable via the alpha slider.
+            ''', '''
+            ''', '''\
+                The eigen-axes may also be toggled to be shown/hidden. In the 2D
+                view, these axes are visualized by their projections onto the
+                slice plane (i.e. like a shadow).
+            ''', '''
+            ''', '''\
+                The resolution/granularity of the mesh used for the 3D view may
+                be controlled via the \'Res\' slider. A slider value of N means the
+                simplex triangle will be subdivided recursively N times for the
+                point grid. This slider is provided to allow the user to
+                balance between program reaction speed and visual quality.
             ''',
         ]
         msg_arr = [textwrap.dedent(x) for x in msg_arr]
@@ -976,5 +1012,6 @@ class App:
         plt.show()
 
 
-App().run()
+if __name__ == '__main__':
+    App().run()
 
