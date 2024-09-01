@@ -9,7 +9,7 @@ from matplotlib import widgets
 
 @dataclass
 class Grassmannian13:
-    point_R3: np.ndarray = field(default_factory=lambda: np.array([1., 0, 0]))
+    point_R3: np.ndarray = field(default_factory=lambda: theta_phi_to_point_R3(0., 0.))
     def verify(self):
         if not 3 == self.point_R3.shape[-1]:
             return False
@@ -29,9 +29,9 @@ class Grassmannian13:
 
 def theta_phi_to_point_R3(theta, phi):
     return np.stack((
-        np.cos(theta)*np.ones_like(phi),
         np.sin(theta)*np.cos(phi),
         np.sin(theta)*np.sin(phi),
+        np.cos(theta)*np.ones_like(phi),
     ), axis=-1)
 
 
@@ -175,118 +175,134 @@ class App:
         return gr13
 
     def render(self, render_all=False):
-        #if True:
-        #    self.axd['embed0'].clear()
-        #    self.axd['embed1'].clear()
-        #    wid = int((1-2*np.abs(0.5-self.registry['theta-slider'].val))*N_tp)
-        #    theta = np.linspace(0, 0.5*np.pi, N_tp+1)[:, None][N_tp-wid:, :]
-        #    phi = np.linspace(0, 2*np.pi, N_tp+1)[None, :]
-        #    gr13 = Grassmannian13(theta_phi_to_point_R3(theta, phi))
-        #    G = gr13.get_embedding()
-        #    G_0 = G[:, :(N_tp//4)+1]
-        #    for i, G_data in enumerate((
-        #        (G_0[..., 0, 0], G_0[..., 1, 1], G_0[..., 2, 2]),
-        #        (G[..., 1, 2], G[..., 0, 2], G[..., 0, 1]))
-        #    ):
-        #        self.axd[f'embed{i}'].plot_surface(
-        #            *G_data,
-        #            color=(0., 1., 0., 0.8),
-        #        )
+
+        def _render_scenes(G_arr, p_arr, artists_key, kw_embed, kw_R3):
+            assert isinstance(G_arr, (tuple, list))
+            assert isinstance(G_arr[0], (tuple, list))
+            assert isinstance(p_arr, (tuple, list))
+            if 2 == p_arr[0].ndim-1:
+                def plot_func(ax, *args, **kwargs):
+                    return ax.plot_surface(*args, **kwargs)
+            elif 1 >= p_arr[0].ndim-1:
+                def plot_func(ax, *args, **kwargs):
+                    return ax.plot3D(*args, **kwargs)[0]
+            else:
+                raise NotImplementedError
+            for artist in self.render_data['artists'][artists_key]:
+                artist.remove()
+            artists = []
+            self.render_data['artists'][artists_key] = artists
+            for G in G_arr:
+                for i, G_data in enumerate((
+                    (G[0][..., 0, 0], G[0][..., 1, 1], G[0][..., 2, 2]),
+                    (G[1][..., 1, 2], G[1][..., 0, 2], G[1][..., 0, 1]))
+                ):
+                    artists.append(plot_func(
+                        self.axd[f'embed{i}'],
+                        *G_data,
+                        **kw_embed,
+                    ))
+            for p in p_arr:
+                artists.append(plot_func(
+                    self.axd['point_R3-scene'],
+                    p[..., 0], p[..., 1], p[..., 2],
+                    **kw_R3,
+                ))
+                assert 'color' in kw_R3
+                kw_R3['color'] = (*kw_R3['color'][:3], kw_R3['color'][3]/2)
+                artists.append(plot_func(
+                    self.axd['point_R3-scene'],
+                    -p[..., 0], -p[..., 1], -p[..., 2],
+                    **kw_R3,
+                ))
+
+        num_grid = self.render_data['G'].shape[0]-1
+        tmp = self.registry['theta-slider'].val
+        ind_mobius_loop = int((1 - (2 * abs(0.5 - tmp))) * num_grid)
+
         do_show_full_mfold = self.translation_tables['toggle-full-mfold'][
             self.registry['toggle-full-mfold'].get_state()
         ]
-        num_grid = self.render_data['G'].shape[0]-1
         if (not do_show_full_mfold) or render_all:
-            for artist in self.render_data['artists']['mfold']:
-                artist.remove()
-            self.render_data['artists']['mfold'] = []
             if not do_show_full_mfold:
-                t = self.registry['theta-slider'].val
-                ind = int((1 - (2 * abs(0.5 - t))) * num_grid)
+                ind = ind_mobius_loop
             else:
                 ind = 0
-            G = self.render_data['G'][ind:]
-            G_0 = self.render_data['G_partial_embed0'][ind:]
-            for i, G_data in enumerate((
-                (G_0[..., 0, 0], G_0[..., 1, 1], G_0[..., 2, 2]),
-                (G[..., 1, 2], G[..., 0, 2], G[..., 0, 1]))
-            ):
-                self.render_data['artists']['mfold'].append(
-                    self.axd[f'embed{i}'].plot_surface(
-                        *G_data,
-                        color=(0., 1., 0., 0.3),
-                    )
-                )
+            G0 = self.render_data['G_fourth_embed0'][ind:]
+            G1 = self.render_data['G'][ind:]
             p = self.render_data['p'][ind:]
-            self.render_data['artists']['mfold'].append(
-                self.axd['point_R3-scene'].plot_surface(
-                    p[..., 0], p[..., 1], p[..., 2],
-                    color=(0., 0., 0., 0.4),
-                )
+            _render_scenes(
+                [[G0, G1]], [p], 'mfold',
+                dict(color=(0., 1., 0., 0.3)),
+                dict(color=(0., 0., 0., 0.4)),
             )
-            self.render_data['artists']['mfold'].append(
-                self.axd['point_R3-scene'].plot_surface(
-                    -p[..., 0], -p[..., 1], -p[..., 2],
-                    color=(0., 0., 0., 0.2),
-                )
-            )
-        for artist in self.render_data['artists']['misc']:
-            artist.remove()
-        self.render_data['artists']['misc'] = []
+
         do_show_loop = self.translation_tables['toggle-loop'][
             self.registry['toggle-loop'].get_state()
         ]
-        if do_show_loop:
-            theta = np.pi * self.registry['theta-slider'].val
-            phi = np.linspace(0, 2*np.pi, num_grid+1)
-            gr13 = Grassmannian13(theta_phi_to_point_R3(theta, phi))
-            G = gr13.get_embedding()
-            for i, G_data in enumerate((
-                (G[..., 0, 0], G[..., 1, 1], G[..., 2, 2]),
-                (G[..., 1, 2], G[..., 0, 2], G[..., 0, 1]))
-            ):
-                self.render_data['artists']['misc'].append(
-                    self.axd[f'embed{i}'].plot3D(
-                        *G_data,
-                        color=(1., 0., 1., 1.),
-                    )[0]
-                )
-            p = gr13.get_point_R3()
-            self.render_data['artists']['misc'].append(
-                self.axd['point_R3-scene'].plot3D(
-                    p[..., 0], p[..., 1], p[..., 2],
-                    color=(1., 0., 1., 1.),
-                )[0]
+        if not do_show_loop:
+            for artists_key in ('loop', 'fiber'):
+                for artist in self.render_data['artists'][artists_key]:
+                    artist.remove()
+                self.render_data['artists'][artists_key] = []
+        else:
+            G0 = self.render_data['G_fourth_embed0'][ind_mobius_loop]
+            G1 = self.render_data['G'][ind_mobius_loop]
+            p = self.render_data['p'][ind_mobius_loop]
+            _render_scenes(
+                [[G0, G1]], [p], 'loop',
+                dict(color=(1., 0., 1., 1.)),
+                dict(color=(1., 0., 1., 1.)),
             )
-            self.render_data['artists']['misc'].append(
-                self.axd['point_R3-scene'].plot3D(
-                    -p[..., 0], -p[..., 1], -p[..., 2],
-                    color=(1., 0., 1., 1.),
-                )[0]
+            num_grid = self.render_data['G'].shape[0]-1
+            tmp = self.registry['phi-slider'].val
+            ind_mobius_fiber = int((0.5 * tmp) * num_grid)
+            def reduce_ind_by_sym(ind):
+                ind = (ind % (num_grid//2))
+                if ind > (num_grid//4):
+                    ind = (num_grid//2) - ind
+                return ind
+            _i = reduce_ind_by_sym(ind_mobius_fiber)
+            G0 = self.render_data['G_fourth_embed0'][ind_mobius_loop:, _i]
+            G1 = self.render_data['G'][ind_mobius_loop:, ind_mobius_fiber]
+            p = self.render_data['p'][ind_mobius_loop:, ind_mobius_fiber]
+            ind_refl = (ind_mobius_fiber + (num_grid//2)) % num_grid
+            _i = reduce_ind_by_sym(ind_refl)
+            G0_refl = self.render_data['G_fourth_embed0'][ind_mobius_loop:, _i]
+            G1_refl = self.render_data['G'][ind_mobius_loop:, ind_refl]
+            p_refl = self.render_data['p'][ind_mobius_loop:, ind_refl]
+            _render_scenes(
+                [[G0, G1], [G0_refl, G1_refl]], [p, p_refl], 'fiber',
+                dict(color=(0., 0., 1., 0.5), linestyle='--'),
+                dict(color=(0., 0., 1., 0.5), linestyle='--'),
             )
+
+        # _render_scenes is not used below because of the baton rendering in
+        # point_R3-scene
         gr13 = self.get_Grassmannian13()
         G = gr13.get_embedding()
+        p = gr13.get_point_R3()[None, :] * np.array([1., -1])[:, None]
+        artists_key = 'point'
+        for artist in self.render_data['artists'][artists_key]:
+            artist.remove()
+        artists = []
+        self.render_data['artists'][artists_key] = artists
         for i, G_data in enumerate((
             (G[0, 0], G[1, 1], G[2, 2]),
             (G[1, 2], G[0, 2], G[0, 1]),
         )):
-            self.render_data['artists']['misc'].append(
-                self.axd[f'embed{i}'].plot3D(
-                    *G_data,
-                    color=(0., 0., 0., 1.),
-                    marker='o',
-                    markersize=10,
-                )[0]
-            )
-        p = gr13.get_point_R3()
-        vec = np.array([-1., 1.])
-        self.render_data['artists']['misc'].append(
-            self.axd['point_R3-scene'].plot3D(
-                p[0]*vec, p[1]*vec, p[2]*vec,
-                '-o',
+            artists.append(self.axd[f'embed{i}'].plot3D(
+                *G_data,
                 color=(0., 0., 0., 1.),
-            )[0]
-        )
+                marker='o',
+                markersize=10,
+            )[0])
+        artists.append(self.axd['point_R3-scene'].plot3D(
+            p[:, 0], p[:, 1], p[:, 2],
+            '-o',
+            color=(0., 0., 0., 1.),
+        )[0])
+
         for ax_name in ['embed0', 'embed1', 'point_R3-scene']:
             set_aspect_equal_3d(self.axd[ax_name])
 
@@ -300,15 +316,17 @@ class App:
         phi = np.linspace(0, 2*np.pi, num_grid+1)[None, :]
         gr13 = Grassmannian13(theta_phi_to_point_R3(theta, phi))
         G = gr13.get_embedding()
-        G_partial_embed0 = G[:, :(num_grid//4)+1]
+        G_fourth_embed0 = G[:, :(num_grid//4)+1]
         p = gr13.get_point_R3()
         self.render_data = {
             'G': G,
-            'G_partial_embed0': G_partial_embed0,
+            'G_fourth_embed0': G_fourth_embed0,
             'p': p,
             'artists': {
                 'mfold': [],
-                'misc': [],
+                'loop': [],
+                'fiber': [],
+                'point': [],
             }
         }
         self.update_embedding_matrix()
@@ -362,10 +380,12 @@ class App:
                 In addition, there are two buttons which toggle certain visuals from being displayed: 
             ''', '''\
                 * The boundary of the mobius strip defined by (pi/2 - x) <=
-                theta <= (pi/2 + x)
+                theta <= (pi/2 + x). When this boundary loop is visible
+                (purple), so too will be the fiber associated to phi on this
+                strip (blue).
             ''', '''\
                 * The entire Gr(1, 3) manifold, or only the mobius strip
-                mentioned above
+                mentioned above.
             ''', '''
             ''', '''\
                 Users are encouraged to play amply with the sliders to
