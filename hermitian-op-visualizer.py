@@ -234,12 +234,11 @@ class App:
             tmp.on_changed(functools.partial(self.update_slice, dim))
 
         # Per-Op
-        color_arr = ('r', 'g', 'b')
         for op_id in range(self.num_ops):
             tmp = self._keep_alive(StateButton(axd[f'op{op_id}mode'], (
-                {'text': f'Showing $A_{op_id}$ as Lemniscate', 'color': color_arr[op_id]},
-                {'text': f'Showing $A_{op_id}$ as +Shell', 'color': color_arr[op_id]},
-                {'text': f'Showing $A_{op_id}$ as -Shell', 'color': color_arr[op_id]},
+                {'text': f'Showing $A_{op_id}$ as Lemniscate', 'color': self.ops_colorwheel[op_id]},
+                {'text': f'Showing $A_{op_id}$ as +Shell', 'color': self.ops_colorwheel[op_id]},
+                {'text': f'Showing $A_{op_id}$ as -Shell', 'color': self.ops_colorwheel[op_id]},
                 {'text': f'Hiding $A_{op_id}$', 'color': 'k'},
             )).set_state(0 if (0==op_id) else 3))
             self.registry['mode-button'][op_id] = tmp

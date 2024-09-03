@@ -11,11 +11,11 @@ from matplotlib import widgets
 class Grassmannian13:
     point_R3: np.ndarray = field(default_factory=lambda: theta_phi_to_point_R3(0., 0.))
     def verify(self):
-        if not 3 == self.point_R3.shape[-1]:
+        if not (3 == self.point_R3.shape[-1]):
             return False
         if not np.isrealobj(self.point_R3):
             return False
-        if 1e-12 < np.max(np.abs(1. - np.linalg.norm(self.point_R3))):
+        if 1e-12 < np.max(np.abs(1. - np.linalg.norm(self.point_R3, axis=-1))):
             return False
         return True
     def get_point_R3(self):
@@ -54,6 +54,7 @@ class App:
             'theta-slider': None,
             'phi-slider': None,
             'toggle-loop': None,
+            'toggle-full-mfold': None,
         }
         margin_fig_x = 0.01
         margin_fig_y = 0.02
@@ -166,7 +167,11 @@ class App:
         prec = 3
         matrix[np.abs(matrix) < 10**(-prec)] = 0.
         with np.printoptions(precision=prec):
-            self.registry['embedding-matrix'].set_val(str(matrix))
+            self.registry['embedding-matrix'].set_val(
+                'Matrix Embedding:\n' + str(matrix)
+            )
+            self.axd['embed0'].set_title(str(matrix[range(3), range(3)]))
+            self.axd['embed1'].set_title(str(matrix[[1, 0, 0], [2, 2, 1]]))
 
     def get_Grassmannian13(self):
         theta = np.pi * self.registry['theta-slider'].val
