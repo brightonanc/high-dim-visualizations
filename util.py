@@ -136,11 +136,15 @@ class SliderStyle0(widgets.Slider):
         self.valtext.set_verticalalignment('top')
         self.valtext.set_horizontalalignment('right')
         self.valtext.set_position((1, 1))
-    def set_val(self, val):
-        super().set_val(val)
-        xy = self.poly.xy
-        xy[2] = val, 0.5
-        xy[3] = val, 0.
-        self._handle.set_xdata([val])
-        self.poly.xy = xy
+    # As of matplotlib version 3.10.0 (possibly earlier), overriding set_val
+    # seems unnecessary and the following code will throw an error as
+    # self.poly.xy is now a tuple of 2 floats. Consequently, this override is
+    # commented out, but not deleted in case I may have overlooked something.
+    #def set_val(self, val):
+    #    super().set_val(val)
+    #    xy = self.poly.xy
+    #    xy[2] = val, 0.5
+    #    xy[3] = val, 0.
+    #    self._handle.set_xdata([val])
+    #    self.poly.xy = xy
 
